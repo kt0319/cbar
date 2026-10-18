@@ -7,7 +7,7 @@ use crate::catalog::{
 };
 use crate::config::{AppConfig, default_config_path, load_config, save_config};
 use crate::fl;
-use crate::parser::{EmbeddedImage, MenuEntry};
+use crate::parser::{EmbeddedImage, ItemParams, MenuEntry, parse_hex_color};
 use crate::plugin::{PluginState, load_plugins, refresh_plugin_state, trigger_entry};
 use cosmic::app::{Core, Task};
 use cosmic::applet::menu_button;
@@ -1020,7 +1020,7 @@ fn render_entry(
         entry_row = entry_row.push(image);
     }
 
-    entry_row = entry_row.push(text::body(label).width(Length::Fill));
+    entry_row = entry_row.push(colored_body(label, &entry.params).width(Length::Fill));
 
     let content = widget::container(entry_row)
         .padding([0, 0, 0, left_padding])
@@ -1148,10 +1148,20 @@ fn plugin_panel_content(plugin: &PluginState) -> Element<'_, Message> {
     }
 
     if plugin.last_error.is_none() && !label.is_empty() {
-        content = content.push(text::body(label));
+        content = content.push(colored_body(label, &plugin.last_output.title_params));
     }
 
     content.into()
+}
+
+fn colored_body(label: String, params: &ItemParams) -> widget::Text<'static, cosmic::Theme> {
+    let body = text::body(label);
+    match params.color.as_deref().and_then(parse_hex_color) {
+        Some([r, g, b, a]) => body.class(cosmic::theme::Text::Color(
+            cosmic::iced::Color::from_rgba8(r, g, b, f32::from(a) / 255.0),
+        )),
+        None => body,
+    }
 }
 
 fn cbar_panel_icon_content() -> Element<'static, Message> {

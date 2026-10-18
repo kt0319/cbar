@@ -205,6 +205,21 @@ fn parse_separator(line: &str) -> (&str, bool) {
     }
 }
 
+pub fn parse_hex_color(value: &str) -> Option<[u8; 4]> {
+    let hex = value.trim().strip_prefix('#')?;
+    if !hex.is_ascii() {
+        return None;
+    }
+    let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
+    let short_channel = |index: usize| channel(index..index + 1).map(|value| value * 17);
+    match hex.len() {
+        3 => Some([short_channel(0)?, short_channel(1)?, short_channel(2)?, 255]),
+        6 => Some([channel(0..2)?, channel(2..4)?, channel(4..6)?, 255]),
+        8 => Some([channel(0..2)?, channel(2..4)?, channel(4..6)?, channel(6..8)?]),
+        _ => None,
+    }
+}
+
 fn parse_params(line: &str) -> (String, ItemParams) {
     let Some(pipe_index) = line.find('|') else {
         return (line.to_owned(), ItemParams::default());
@@ -332,7 +347,18 @@ fn normalize_menu_entries(entries: Vec<MenuEntry>) -> Vec<MenuEntry> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_plugin_output, parse_refresh_interval};
+    use super::{parse_hex_color, parse_plugin_output, parse_refresh_interval};
+
+    #[test]
+    fn parses_hex_colors() {
+        assert_eq!(parse_hex_color("#fff"), Some([255, 255, 255, 255]));
+        assert_eq!(parse_hex_color("#102030"), Some([16, 32, 48, 255]));
+        assert_eq!(parse_hex_color("#10203040"), Some([16, 32, 48, 64]));
+        assert_eq!(parse_hex_color("red"), None);
+        assert_eq!(parse_hex_color("#12345"), None);
+        assert_eq!(parse_hex_color("#ggg"), None);
+    }
+
     use std::time::Duration;
 
     #[test]
