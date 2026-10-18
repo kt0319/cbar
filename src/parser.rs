@@ -20,6 +20,7 @@ pub struct ItemParams {
     pub disabled: bool,
     pub trim: bool,
     pub color: Option<String>,
+    pub size: Option<u16>,
     pub image: Option<EmbeddedImage>,
     pub params: Vec<String>,
 }
@@ -36,6 +37,7 @@ impl Default for ItemParams {
             disabled: false,
             trim: true,
             color: None,
+            size: None,
             image: None,
             params: Vec::new(),
         }
@@ -242,6 +244,7 @@ fn parse_params(line: &str) -> (String, ItemParams) {
             "disabled" => params.disabled = value == "true",
             "trim" => params.trim = value == "true",
             "color" => params.color = Some(value),
+            "size" => params.size = value.parse().ok().filter(|size| *size > 0),
             "image" => params.image = decode_image_param(&value, false),
             "templateImage" => params.image = decode_image_param(&value, true),
             _ if key.starts_with("param") => {
@@ -348,6 +351,13 @@ fn normalize_menu_entries(entries: Vec<MenuEntry>) -> Vec<MenuEntry> {
 #[cfg(test)]
 mod tests {
     use super::{parse_hex_color, parse_plugin_output, parse_refresh_interval};
+
+    #[test]
+    fn parses_size_param() {
+        let parsed = parse_plugin_output("12:00 | size=16\n---\nitem | size=0\n");
+        assert_eq!(parsed.title_params.size, Some(16));
+        assert_eq!(parsed.menu_entries[0].params.size, None);
+    }
 
     #[test]
     fn parses_hex_colors() {
