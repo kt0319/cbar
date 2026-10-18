@@ -49,10 +49,16 @@ pub async fn refresh_plugin_state(mut plugin: PluginState) -> PluginState {
     plugin
 }
 
-pub async fn trigger_entry(plugin: &PluginState, entry: &MenuEntry) -> Result<bool, String> {
+pub async fn trigger_entry(
+    plugin: &PluginState,
+    entry: &MenuEntry,
+    activation_token: Option<String>,
+) -> Result<bool, String> {
     if let Some(href) = &entry.params.href {
-        Command::new("xdg-open")
-            .arg(href)
+        let mut command = Command::new("xdg-open");
+        command.arg(href);
+        apply_plugin_env(&mut command, activation_token.as_deref());
+        command
             .spawn()
             .map_err(|err| format!("failed to open href: {err}"))?;
         return Ok(entry.params.refresh);
@@ -64,6 +70,7 @@ pub async fn trigger_entry(plugin: &PluginState, entry: &MenuEntry) -> Result<bo
             shell.as_str(),
             &entry.params.params,
             entry.params.terminal,
+            activation_token.as_deref(),
         )
         .await?;
         return Ok(entry.params.refresh);
@@ -75,6 +82,7 @@ pub async fn trigger_entry(plugin: &PluginState, entry: &MenuEntry) -> Result<bo
             plugin.path.to_string_lossy().as_ref(),
             &entry.params.params,
             entry.params.terminal,
+            activation_token.as_deref(),
         )
         .await?;
         return Ok(entry.params.refresh);
@@ -88,6 +96,7 @@ async fn run_action_command(
     executable: &str,
     args: &[String],
     terminal: bool,
+    activation_token: Option<&str>,
 ) -> Result<(), String> {
     let plugin_dir = plugin.path.parent().unwrap_or(Path::new("."));
 
@@ -97,7 +106,7 @@ async fn run_action_command(
         command.arg(executable);
         command.args(args);
         command.current_dir(plugin_dir);
-        apply_plugin_env(&mut command);
+        apply_plugin_env(&mut command, activation_token);
         command
             .spawn()
             .map_err(|err| format!("failed to spawn terminal action: {err}"))?;
@@ -107,7 +116,7 @@ async fn run_action_command(
     let mut command = Command::new(executable);
     command.args(args);
     command.current_dir(plugin_dir);
-    apply_plugin_env(&mut command);
+    apply_plugin_env(&mut command, activation_token);
     let status = command
         .status()
         .await
@@ -174,7 +183,7 @@ async fn refresh_plugin(plugin: &mut PluginState) {
 
 async fn run_plugin(path: &Path) -> Result<String, String> {
     let mut command = Command::new(path);
-    apply_plugin_env(&mut command);
+    apply_plugin_env(&mut command, None);
 
     let output = command
         .output()
@@ -194,8 +203,11 @@ async fn run_plugin(path: &Path) -> Result<String, String> {
     String::from_utf8(output.stdout).map_err(|err| format!("invalid utf-8 output: {err}"))
 }
 
-fn apply_plugin_env(command: &mut Command) {
+fn apply_plugin_env(command: &mut Command, activation_token: Option<&str>) {
     if let Ok(env) = load_env_file(&default_env_path()) {
         command.envs(env);
+    }
+    if let Some(token) = activation_token {
+        command.env("XDG_ACTIVATION_TOKEN", token);
     }
 }

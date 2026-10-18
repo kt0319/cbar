@@ -7,10 +7,14 @@ use crate::catalog::{
 };
 use crate::config::{AppConfig, default_config_path, load_config, save_config};
 use crate::fl;
-use crate::parser::EmbeddedImage;
+use crate::parser::{EmbeddedImage, MenuEntry};
 use crate::plugin::{PluginState, load_plugins, refresh_plugin_state, trigger_entry};
 use cosmic::app::{Core, Task};
 use cosmic::applet::menu_button;
+use cosmic::applet::token::subscription::{
+    TokenRequest, TokenUpdate, activation_token_subscription,
+};
+use cosmic::cctk::sctk::reexports::calloop;
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::time;
 use cosmic::iced::widget::{Image, column, container, row, scrollable, svg};
@@ -29,9 +33,9 @@ use tokio::process::Command;
 
 const APP_ID: &str = "io.github.alexprates.CBar";
 const REPOSITORY_URL: &str = "https://github.com/alexandreprates/cbar";
-const PANEL_IMAGE_HEIGHT: u16 = 22;
-const PLUGIN_MENU_POPUP_WIDTH: f32 = 280.0;
-const PLUGIN_MENU_POPUP_MIN_WIDTH: f32 = 180.0;
+const PANEL_IMAGE_HEIGHT: u16 = 28;
+const PLUGIN_MENU_POPUP_WIDTH: f32 = 600.0;
+const PLUGIN_MENU_POPUP_MIN_WIDTH: f32 = 400.0;
 const MENU_POPUP_WIDTH: f32 = 420.0;
 const MENU_POPUP_MIN_WIDTH: f32 = 360.0;
 const CATALOG_POPUP_WIDTH: f32 = 520.0;
@@ -67,6 +71,9 @@ struct CBarApplet {
     catalog_status: Option<String>,
     catalog_installations: CatalogInstallations,
     catalog_installations_path: PathBuf,
+    activation_tx: Option<calloop::channel::Sender<TokenRequest>>,
+    activation_request_seq: u64,
+    pending_activation: Vec<(String, PluginState, MenuEntry)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +99,7 @@ enum Message {
         plugin: Box<PluginState>,
     },
     RefreshAll,
+    ExternalRefresh(String),
     TogglePluginSelection(String),
     OpenPluginCatalog,
     ReloadPluginCatalog,
@@ -115,6 +123,7 @@ enum Message {
         alternate: bool,
     },
     EntryFinished(Result<bool, String>),
+    ActivationToken(TokenUpdate),
 }
 
 impl cosmic::Application for CBarApplet {
@@ -154,6 +163,9 @@ impl cosmic::Application for CBarApplet {
                 catalog_status: None,
                 catalog_installations,
                 catalog_installations_path,
+                activation_tx: None,
+                activation_request_seq: 0,
+                pending_activation: Vec::new(),
             },
             Task::perform(
                 load_plugins(plugin_dir),
@@ -255,6 +267,11 @@ impl cosmic::Application for CBarApplet {
             }
             Message::RefreshAll => {
                 return self.spawn_due_refreshes(true);
+            }
+            Message::ExternalRefresh(plugin_name) => {
+                if let Some(index) = self.plugins.iter().position(|p| p.name == plugin_name) {
+                    return self.request_refresh_for_index(index, true);
+                }
             }
             Message::TogglePluginSelection(plugin_name) => {
                 let enabled = self.toggle_plugin_selection(&plugin_name);
@@ -534,9 +551,42 @@ impl cosmic::Application for CBarApplet {
                     } else {
                         entry
                     };
-                    return Task::perform(
-                        async move { trigger_entry(&plugin, &chosen_entry).await },
-                        app_message(Message::EntryFinished),
+
+                    // refresh=trueはメニュー内で状態を更新して見せたい操作(トグル・pull待ち等)
+                    // のためポップアップを開いたままにするが、それ以外(設定アプリを開く等の
+                    // 起動系)は実行後すぐ開いたウィンドウを触れるようポップアップを閉じる。
+                    let close_popup_task = if !chosen_entry.params.refresh {
+                        self.popup_plugin_index = None;
+                        self.popup.take().map(destroy_popup)
+                    } else {
+                        None
+                    };
+
+                    // 実行前にxdg-activationトークンを取得しておく。トークン無しで起動した
+                    // GUIアプリ(例: cosmic-settings)は、既存ウィンドウが裏に隠れていても
+                    // コンポジタが前面に出してくれない(単にページだけ切り替わって見えなくなる)。
+                    let run_task = if let Some(tx) = &self.activation_tx {
+                        let request_id =
+                            format!("cbar-entry-{}", self.activation_request_seq);
+                        self.activation_request_seq += 1;
+                        self.pending_activation
+                            .push((request_id.clone(), plugin, chosen_entry));
+                        let _ = tx.send(TokenRequest {
+                            app_id: APP_ID.to_string(),
+                            exec: request_id,
+                        });
+                        Task::none()
+                    } else {
+                        Task::perform(
+                            async move { trigger_entry(&plugin, &chosen_entry, None).await },
+                            app_message(Message::EntryFinished),
+                        )
+                    };
+
+                    return Task::batch(
+                        close_popup_task
+                            .into_iter()
+                            .chain(std::iter::once(run_task)),
                     );
                 }
             }
@@ -545,6 +595,27 @@ impl cosmic::Application for CBarApplet {
                 Ok(false) => {}
                 Err(err) => {
                     self.status = err;
+                }
+            },
+            Message::ActivationToken(update) => match update {
+                TokenUpdate::Init(tx) => {
+                    self.activation_tx = Some(tx);
+                }
+                TokenUpdate::Finished => {
+                    self.activation_tx = None;
+                }
+                TokenUpdate::ActivationToken { token, exec } => {
+                    if let Some(pos) = self
+                        .pending_activation
+                        .iter()
+                        .position(|(id, _, _)| *id == exec)
+                    {
+                        let (_, plugin, entry) = self.pending_activation.remove(pos);
+                        return Task::perform(
+                            async move { trigger_entry(&plugin, &entry, token).await },
+                            app_message(Message::EntryFinished),
+                        );
+                    }
                 }
             },
         }
@@ -723,6 +794,8 @@ impl cosmic::Application for CBarApplet {
         Subscription::batch(vec![
             time::every(Duration::from_secs(1)).map(|_| Message::Tick),
             rectangle_tracker_subscription(0).map(|event| Message::Rectangle(event.1)),
+            activation_token_subscription(0).map(Message::ActivationToken),
+            external_refresh_subscription(),
         ])
     }
 
@@ -958,7 +1031,7 @@ fn render_entry(
     }
 
     menu_button(content)
-        .padding([2, 0])
+        .padding([8, 16])
         .on_press(Message::RunEntry {
             plugin_index,
             entry_index,
@@ -1691,4 +1764,36 @@ fn image_element(image: &EmbeddedImage, size: u16) -> Option<Element<'static, Me
             .height(Length::Fixed(f32::from(size)))
             .into(),
     })
+}
+
+// 外部プロセス(cosmic-workspace-info watch等)がUnixソケット経由で「このプラグインファイル名を
+// 即時リフレッシュして」と伝えてくるためのsubscription。1行=1プラグインファイル名。
+// ソケットが無い/接続が来ない間は何もしない(1秒Tickによる通常ポーリングは別途動き続ける)。
+fn external_refresh_subscription() -> Subscription<Message> {
+    Subscription::run(|| cosmic::iced::stream::channel(16, |mut output: futures::channel::mpsc::Sender<Message>| async move {
+        use futures::SinkExt;
+        use tokio::io::AsyncBufReadExt;
+        use tokio::net::UnixListener;
+
+        let socket_path = std::env::var("XDG_RUNTIME_DIR")
+            .map(|dir| format!("{dir}/cbar.sock"))
+            .unwrap_or_else(|_| "/tmp/cbar.sock".to_string());
+        let _ = std::fs::remove_file(&socket_path);
+        let Ok(listener) = UnixListener::bind(&socket_path) else {
+            return;
+        };
+
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                continue;
+            };
+            let reader = tokio::io::BufReader::new(stream);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if output.send(Message::ExternalRefresh(line)).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }))
 }

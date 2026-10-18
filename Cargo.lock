@@ -667,6 +667,7 @@ name = "cbar"
 version = "1.4.4"
 dependencies = [
  "base64",
+ "futures",
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",
