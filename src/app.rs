@@ -29,7 +29,7 @@ use cosmic::widget::{
 };
 use cosmic::{Element, widget};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 
@@ -47,7 +47,10 @@ const POSITIONER_MAX_WIDTH: f32 = 760.0;
 const POSITIONER_MAX_HEIGHT: f32 = 1080.0;
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
+static INSTANCE_NAME: OnceLock<Option<String>> = OnceLock::new();
+
 pub fn run(instance: Option<String>) -> cosmic::iced::Result {
+    let _ = INSTANCE_NAME.set(instance.clone());
     cosmic::applet::run::<CBarApplet>(instance)
 }
 
@@ -1790,6 +1793,15 @@ fn image_element(image: &EmbeddedImage, size: u16) -> Option<Element<'static, Me
 // 外部プロセス(cosmic-workspace-info watch等)がUnixソケット経由で「このプラグインファイル名を
 // 即時リフレッシュして」と伝えてくるためのsubscription。1行=1プラグインファイル名。
 // ソケットが無い/接続が来ない間は何もしない(1秒Tickによる通常ポーリングは別途動き続ける)。
+fn external_refresh_socket_path() -> String {
+    let file_name = match INSTANCE_NAME.get().and_then(Option::as_deref) {
+        Some(instance) => format!("cbar-{instance}.sock"),
+        None => "cbar.sock".to_owned(),
+    };
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_owned());
+    format!("{dir}/{file_name}")
+}
+
 fn external_refresh_subscription() -> Subscription<Message> {
     Subscription::run(|| {
         cosmic::iced::stream::channel(
@@ -1799,9 +1811,7 @@ fn external_refresh_subscription() -> Subscription<Message> {
                 use tokio::io::AsyncBufReadExt;
                 use tokio::net::UnixListener;
 
-                let socket_path = std::env::var("XDG_RUNTIME_DIR")
-                    .map(|dir| format!("{dir}/cbar.sock"))
-                    .unwrap_or_else(|_| "/tmp/cbar.sock".to_string());
+                let socket_path = external_refresh_socket_path();
                 let _ = std::fs::remove_file(&socket_path);
                 let Ok(listener) = UnixListener::bind(&socket_path) else {
                     return;
