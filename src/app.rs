@@ -5,7 +5,9 @@ use crate::catalog::{
     load_catalog_installations, reconcile_catalog_installations, remove_catalog_plugin,
     save_catalog_installations, update_catalog_plugin,
 };
-use crate::config::{AppConfig, default_config_path, load_config, save_config};
+use crate::config::{
+    AppConfig, default_config_path, instance_config_path, load_config, save_config,
+};
 use crate::fl;
 use crate::parser::{EmbeddedImage, ItemParams, MenuEntry, parse_hex_color};
 use crate::plugin::{PluginState, load_plugins, refresh_plugin_state, trigger_entry};
@@ -45,8 +47,8 @@ const POSITIONER_MAX_WIDTH: f32 = 760.0;
 const POSITIONER_MAX_HEIGHT: f32 = 1080.0;
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
-pub fn run() -> cosmic::iced::Result {
-    cosmic::applet::run::<CBarApplet>(())
+pub fn run(instance: Option<String>) -> cosmic::iced::Result {
+    cosmic::applet::run::<CBarApplet>(instance)
 }
 
 struct CBarApplet {
@@ -128,14 +130,21 @@ enum Message {
 
 impl cosmic::Application for CBarApplet {
     type Executor = cosmic::SingleThreadExecutor;
-    type Flags = ();
+    type Flags = Option<String>;
     type Message = Message;
     const APP_ID: &'static str = APP_ID;
 
-    fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Self::Message>) {
+    fn init(core: Core, instance: Self::Flags) -> (Self, Task<Self::Message>) {
         let plugin_dir = default_plugin_dir();
-        let config_path = default_config_path();
-        let config = load_config(&config_path).unwrap_or_default();
+        let config_path = match instance.as_deref() {
+            Some(name) => instance_config_path(name),
+            None => default_config_path(),
+        };
+        let config = if instance.is_some() && !config_path.exists() {
+            AppConfig::without_plugins()
+        } else {
+            load_config(&config_path).unwrap_or_default()
+        };
         let catalog_installations_path = default_catalog_installations_path();
         let catalog_installations =
             load_catalog_installations(&catalog_installations_path).unwrap_or_default();
@@ -566,8 +575,7 @@ impl cosmic::Application for CBarApplet {
                     // GUIアプリ(例: cosmic-settings)は、既存ウィンドウが裏に隠れていても
                     // コンポジタが前面に出してくれない(単にページだけ切り替わって見えなくなる)。
                     let run_task = if let Some(tx) = &self.activation_tx {
-                        let request_id =
-                            format!("cbar-entry-{}", self.activation_request_seq);
+                        let request_id = format!("cbar-entry-{}", self.activation_request_seq);
                         self.activation_request_seq += 1;
                         self.pending_activation
                             .push((request_id.clone(), plugin, chosen_entry));
@@ -1783,30 +1791,35 @@ fn image_element(image: &EmbeddedImage, size: u16) -> Option<Element<'static, Me
 // 即時リフレッシュして」と伝えてくるためのsubscription。1行=1プラグインファイル名。
 // ソケットが無い/接続が来ない間は何もしない(1秒Tickによる通常ポーリングは別途動き続ける)。
 fn external_refresh_subscription() -> Subscription<Message> {
-    Subscription::run(|| cosmic::iced::stream::channel(16, |mut output: futures::channel::mpsc::Sender<Message>| async move {
-        use futures::SinkExt;
-        use tokio::io::AsyncBufReadExt;
-        use tokio::net::UnixListener;
+    Subscription::run(|| {
+        cosmic::iced::stream::channel(
+            16,
+            |mut output: futures::channel::mpsc::Sender<Message>| async move {
+                use futures::SinkExt;
+                use tokio::io::AsyncBufReadExt;
+                use tokio::net::UnixListener;
 
-        let socket_path = std::env::var("XDG_RUNTIME_DIR")
-            .map(|dir| format!("{dir}/cbar.sock"))
-            .unwrap_or_else(|_| "/tmp/cbar.sock".to_string());
-        let _ = std::fs::remove_file(&socket_path);
-        let Ok(listener) = UnixListener::bind(&socket_path) else {
-            return;
-        };
-
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                continue;
-            };
-            let reader = tokio::io::BufReader::new(stream);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                if output.send(Message::ExternalRefresh(line)).await.is_err() {
+                let socket_path = std::env::var("XDG_RUNTIME_DIR")
+                    .map(|dir| format!("{dir}/cbar.sock"))
+                    .unwrap_or_else(|_| "/tmp/cbar.sock".to_string());
+                let _ = std::fs::remove_file(&socket_path);
+                let Ok(listener) = UnixListener::bind(&socket_path) else {
                     return;
+                };
+
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        continue;
+                    };
+                    let reader = tokio::io::BufReader::new(stream);
+                    let mut lines = reader.lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if output.send(Message::ExternalRefresh(line)).await.is_err() {
+                            return;
+                        }
+                    }
                 }
-            }
-        }
-    }))
+            },
+        )
+    })
 }

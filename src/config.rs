@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "config.json";
+const INSTANCE_CONFIG_PREFIX: &str = "config-";
 const ENV_FILE_NAME: &str = "env";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -14,6 +15,12 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    pub fn without_plugins() -> Self {
+        Self {
+            enabled_plugins: Some(BTreeSet::new()),
+        }
+    }
+
     pub fn is_enabled(&self, plugin_name: &str) -> bool {
         self.enabled_plugins
             .as_ref()
@@ -29,6 +36,24 @@ pub fn default_config_path() -> PathBuf {
     }
 
     PathBuf::from(CONFIG_FILE_NAME)
+}
+
+pub fn instance_config_path(instance: &str) -> PathBuf {
+    default_config_path().with_file_name(format!("{INSTANCE_CONFIG_PREFIX}{instance}.json"))
+}
+
+pub fn validate_instance_name(name: &str) -> Result<(), String> {
+    let is_valid = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if is_valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid instance name '{name}': use only ASCII letters, digits, '-' and '_'"
+        ))
+    }
 }
 
 pub fn default_env_path() -> PathBuf {
@@ -167,12 +192,31 @@ fn strip_unquoted_comment(value: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppConfig, load_config, load_env_file, save_config};
+    use super::{AppConfig, load_config, load_env_file, save_config, validate_instance_name};
     use std::collections::BTreeSet;
     use std::fs::{self, File};
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn accepts_simple_instance_names() {
+        assert!(validate_instance_name("workspaces").is_ok());
+        assert!(validate_instance_name("right-2_a").is_ok());
+    }
+
+    #[test]
+    fn rejects_unsafe_instance_names() {
+        for name in ["", "../x", "a/b", "a b", "日本語", "a.json"] {
+            assert!(validate_instance_name(name).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn instance_without_config_enables_no_plugins() {
+        let config = AppConfig::without_plugins();
+        assert!(!config.is_enabled("any.1s.sh"));
+    }
 
     #[test]
     fn missing_config_uses_defaults() {
