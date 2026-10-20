@@ -847,6 +847,7 @@ impl CBarApplet {
         self.popup = Some(new_id);
         self.popup_plugin_index = plugin_index;
         self.popup_view = popup_view;
+        self.expanded_submenus.clear();
 
         let popup_settings = self.core.applet.get_popup_settings(
             self.core.main_window_id().unwrap(),
