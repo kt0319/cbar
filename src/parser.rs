@@ -21,6 +21,7 @@ pub struct ItemParams {
     pub trim: bool,
     pub color: Option<String>,
     pub size: Option<u16>,
+    pub width: Option<u16>,
     pub image: Option<EmbeddedImage>,
     pub params: Vec<String>,
 }
@@ -38,6 +39,7 @@ impl Default for ItemParams {
             trim: true,
             color: None,
             size: None,
+            width: None,
             image: None,
             params: Vec::new(),
         }
@@ -217,7 +219,12 @@ pub fn parse_hex_color(value: &str) -> Option<[u8; 4]> {
     match hex.len() {
         3 => Some([short_channel(0)?, short_channel(1)?, short_channel(2)?, 255]),
         6 => Some([channel(0..2)?, channel(2..4)?, channel(4..6)?, 255]),
-        8 => Some([channel(0..2)?, channel(2..4)?, channel(4..6)?, channel(6..8)?]),
+        8 => Some([
+            channel(0..2)?,
+            channel(2..4)?,
+            channel(4..6)?,
+            channel(6..8)?,
+        ]),
         _ => None,
     }
 }
@@ -245,6 +252,7 @@ fn parse_params(line: &str) -> (String, ItemParams) {
             "trim" => params.trim = value == "true",
             "color" => params.color = Some(value),
             "size" => params.size = value.parse().ok().filter(|size| *size > 0),
+            "width" => params.width = value.parse().ok().filter(|width| *width > 0),
             "image" => params.image = decode_image_param(&value, false),
             "templateImage" => params.image = decode_image_param(&value, true),
             _ if key.starts_with("param") => {
@@ -357,6 +365,13 @@ mod tests {
         let parsed = parse_plugin_output("12:00 | size=16\n---\nitem | size=0\n");
         assert_eq!(parsed.title_params.size, Some(16));
         assert_eq!(parsed.menu_entries[0].params.size, None);
+    }
+
+    #[test]
+    fn parses_width_param() {
+        let parsed = parse_plugin_output("12:00 | width=360\n---\nitem | width=0\n");
+        assert_eq!(parsed.title_params.width, Some(360));
+        assert_eq!(parsed.menu_entries[0].params.width, None);
     }
 
     #[test]

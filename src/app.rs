@@ -805,7 +805,10 @@ impl cosmic::Application for CBarApplet {
         }
 
         let (popup_width, popup_min_width) = match self.popup_view {
-            PopupView::PluginMenu => (PLUGIN_MENU_POPUP_WIDTH, PLUGIN_MENU_POPUP_MIN_WIDTH),
+            PopupView::PluginMenu => {
+                let width = self.plugin_popup_width(self.popup_plugin_index);
+                (width, PLUGIN_MENU_POPUP_MIN_WIDTH.min(width))
+            }
             PopupView::Settings | PopupView::Catalog => (MENU_POPUP_WIDTH, MENU_POPUP_MIN_WIDTH),
         };
 
@@ -837,6 +840,13 @@ impl cosmic::Application for CBarApplet {
 }
 
 impl CBarApplet {
+    fn plugin_popup_width(&self, plugin_index: Option<usize>) -> f32 {
+        plugin_index
+            .and_then(|index| self.plugins.get(index))
+            .and_then(|plugin| plugin.last_output.title_params.width)
+            .map_or(PLUGIN_MENU_POPUP_WIDTH, f32::from)
+    }
+
     fn open_popup_with_view(
         &mut self,
         plugin_index: Option<usize>,
@@ -857,9 +867,15 @@ impl CBarApplet {
             None,
         );
         let mut popup_settings = popup_settings;
+        let positioner_min_width = match popup_view {
+            PopupView::PluginMenu => {
+                MENU_POPUP_MIN_WIDTH.min(self.plugin_popup_width(plugin_index))
+            }
+            PopupView::Settings | PopupView::Catalog => MENU_POPUP_MIN_WIDTH,
+        };
         popup_settings.positioner.size_limits = Limits::NONE
             .min_height(1.0)
-            .min_width(MENU_POPUP_MIN_WIDTH)
+            .min_width(positioner_min_width)
             .max_width(POSITIONER_MAX_WIDTH)
             .max_height(POSITIONER_MAX_HEIGHT);
 
