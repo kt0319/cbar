@@ -735,7 +735,12 @@ impl cosmic::Application for CBarApplet {
             PopupView::PluginMenu => {
                 if let Some(plugin_index) = self.popup_plugin_index {
                     if let Some(plugin) = self.plugins.get(plugin_index) {
-                        content = push_plugin_menu(content, plugin_index, plugin, &self.expanded_submenus);
+                        content = push_plugin_menu(
+                            content,
+                            plugin_index,
+                            plugin,
+                            &self.expanded_submenus,
+                        );
                     } else {
                         content =
                             content.push(popup_label(fl!("no-selected-plugins").to_string(), 14));
@@ -750,8 +755,13 @@ impl cosmic::Application for CBarApplet {
                         }
 
                         has_visible_plugins = true;
-                        content = push_plugin_menu(content, plugin_index, plugin, &self.expanded_submenus)
-                            .push(divider::horizontal::default());
+                        content = push_plugin_menu(
+                            content,
+                            plugin_index,
+                            plugin,
+                            &self.expanded_submenus,
+                        )
+                        .push(divider::horizontal::default());
                     }
 
                     if !self.plugins.is_empty() && !has_visible_plugins {
@@ -1010,6 +1020,8 @@ impl CBarApplet {
     }
 }
 
+const SUBMENU_ARROW_SIZE: u16 = 24;
+
 fn has_submenu(entries: &[MenuEntry], entry_index: usize) -> bool {
     let entry = &entries[entry_index];
     !entry.separator
@@ -1035,9 +1047,6 @@ fn render_entry(
     if entry.params.href.is_some() {
         label.push_str(" ↗");
     }
-    if let Some(expanded) = submenu_expanded {
-        label.push_str(if expanded { " ▾" } else { " ▸" });
-    }
 
     let left_padding = 20 + (entry.level as u16 * 16) + if is_alternate { 12 } else { 0 };
     let mut entry_row = row![]
@@ -1055,6 +1064,11 @@ fn render_entry(
     }
 
     entry_row = entry_row.push(styled_body(label, &entry.params).width(Length::Fill));
+
+    if let Some(expanded) = submenu_expanded {
+        entry_row =
+            entry_row.push(text::body(if expanded { "▾" } else { "▸" }).size(SUBMENU_ARROW_SIZE));
+    }
 
     let content = widget::container(entry_row)
         .padding([0, 0, 0, left_padding])
@@ -1142,7 +1156,13 @@ fn push_plugin_menu<'a>(
         ));
 
         if let Some(alternate) = entry.alternate.as_ref() {
-            content = content.push(render_entry(plugin_index, entry_index, alternate, true, None));
+            content = content.push(render_entry(
+                plugin_index,
+                entry_index,
+                alternate,
+                true,
+                None,
+            ));
         }
     }
 
