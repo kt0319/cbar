@@ -1021,6 +1021,7 @@ impl CBarApplet {
 }
 
 const SUBMENU_ARROW_SIZE: u16 = 24;
+const EXPANDED_GROUP_TINT_ALPHA: f32 = 0.18;
 
 fn has_submenu(entries: &[MenuEntry], entry_index: usize) -> bool {
     let entry = &entries[entry_index];
@@ -1128,6 +1129,7 @@ fn push_plugin_menu<'a>(
 
     let entries = plugin.menu_entries();
     let mut collapsed_level: Option<usize> = None;
+    let mut open_group: Option<(usize, Vec<Element<'static, Message>>)> = None;
     for (entry_index, entry) in entries.iter().enumerate() {
         if let Some(level) = collapsed_level {
             if entry.level > level {
@@ -1136,27 +1138,38 @@ fn push_plugin_menu<'a>(
             collapsed_level = None;
         }
 
+        if open_group
+            .as_ref()
+            .is_some_and(|(level, _)| entry.level <= *level)
+        {
+            content = content.push(expanded_group_element(open_group.take()));
+        }
+
         if entry.separator {
-            content = content.push(divider::horizontal::default());
+            match open_group.as_mut() {
+                Some((_, items)) => items.push(divider::horizontal::default().into()),
+                None => content = content.push(divider::horizontal::default()),
+            }
             continue;
         }
 
         let submenu_expanded = has_submenu(entries, entry_index)
             .then(|| expanded_submenus.contains(&(plugin_index, entry.text.clone())));
-        if submenu_expanded == Some(false) {
-            collapsed_level = Some(entry.level);
+        match submenu_expanded {
+            Some(false) => collapsed_level = Some(entry.level),
+            Some(true) => open_group = Some((entry.level, Vec::new())),
+            None => {}
         }
 
-        content = content.push(render_entry(
+        let mut rendered = vec![render_entry(
             plugin_index,
             entry_index,
             entry,
             false,
             submenu_expanded,
-        ));
-
+        )];
         if let Some(alternate) = entry.alternate.as_ref() {
-            content = content.push(render_entry(
+            rendered.push(render_entry(
                 plugin_index,
                 entry_index,
                 alternate,
@@ -1164,9 +1177,50 @@ fn push_plugin_menu<'a>(
                 None,
             ));
         }
+        for element in rendered {
+            match open_group.as_mut() {
+                Some((_, items)) => items.push(element),
+                None => content = content.push(element),
+            }
+        }
+    }
+
+    if open_group.is_some() {
+        content = content.push(expanded_group_element(open_group.take()));
     }
 
     content
+}
+
+fn expanded_group_element(
+    group: Option<(usize, Vec<Element<'static, Message>>)>,
+) -> Element<'static, Message> {
+    let items = group.map(|(_, items)| items).unwrap_or_default();
+    widget::container(widget::column::with_children(items))
+        .width(Length::Fill)
+        .class(expanded_group_container())
+        .into()
+}
+
+fn expanded_group_container<'a>() -> cosmic::theme::Container<'a> {
+    cosmic::theme::Container::custom(|theme| {
+        let accent = theme.cosmic().accent_color();
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(
+                cosmic::iced::Color::from_rgba(
+                    accent.red,
+                    accent.green,
+                    accent.blue,
+                    EXPANDED_GROUP_TINT_ALPHA,
+                ),
+            )),
+            border: cosmic::iced::Border {
+                radius: 8.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
 }
 
 fn app_message<T>(
