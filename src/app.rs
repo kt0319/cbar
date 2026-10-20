@@ -563,6 +563,8 @@ impl cosmic::Application for CBarApplet {
             } => {
                 let key = (plugin_index, label);
                 if !self.expanded_submenus.remove(&key) {
+                    self.expanded_submenus
+                        .retain(|(index, _)| *index != plugin_index);
                     self.expanded_submenus.insert(key);
                 }
             }
