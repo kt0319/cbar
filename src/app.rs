@@ -688,12 +688,7 @@ impl cosmic::Application for CBarApplet {
                         .padding([0, plugin_padding])
                         .class(cosmic::theme::Button::AppletIcon);
 
-                buttons = buttons.push(widget::mouse_area(button).on_right_press(
-                    Message::TogglePopup {
-                        plugin_index: Some(plugin_index),
-                        popup_view: PopupView::Settings,
-                    },
-                ));
+                buttons = buttons.push(button);
             }
 
             buttons.into()
