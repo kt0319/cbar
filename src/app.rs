@@ -1044,7 +1044,11 @@ const EXPANDED_GROUP_TINT_ALPHA: f32 = 0.04;
 
 fn has_submenu(entries: &[MenuEntry], entry_index: usize) -> bool {
     let entry = &entries[entry_index];
+    let has_action = entry.params.shell.is_some()
+        || entry.params.href.is_some()
+        || !entry.params.params.is_empty();
     !entry.separator
+        && !has_action
         && entries
             .get(entry_index + 1)
             .is_some_and(|next| !next.separator && next.level > entry.level)
@@ -2003,6 +2007,14 @@ mod submenu_tests {
         assert!(has_submenu(&entries, 0));
         assert!(!has_submenu(&entries, 1));
         assert!(!has_submenu(&entries, 2));
+    }
+
+    #[test]
+    fn parent_with_action_is_not_a_submenu() {
+        let mut parent = entry(0, false);
+        parent.params.shell = Some("true".to_owned());
+        let entries = vec![parent, entry(1, false)];
+        assert!(!has_submenu(&entries, 0));
     }
 
     #[test]
