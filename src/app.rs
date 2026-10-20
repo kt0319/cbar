@@ -1021,7 +1021,7 @@ impl CBarApplet {
 }
 
 const SUBMENU_ARROW_SIZE: u16 = 24;
-const EXPANDED_GROUP_TINT_ALPHA: f32 = 0.08;
+const EXPANDED_GROUP_TINT_ALPHA: f32 = 0.04;
 
 fn has_submenu(entries: &[MenuEntry], entry_index: usize) -> bool {
     let entry = &entries[entry_index];
