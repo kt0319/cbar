@@ -50,4 +50,6 @@ fi
 
 printf 'Installed cbar instance: %s\n' "${instance}"
 printf 'Desktop entry: %s\n' "${desktop_target}"
-printf 'Add "cbar (%s)" to the panel from COSMIC settings.\n' "${instance}"
+if [[ -z "${CBAR_SKIP_PANEL_HINT:-}" ]]; then
+  printf 'Add "cbar (%s)" to the panel from COSMIC settings, or run scripts/add-plugin.sh.\n' "${instance}"
+fi

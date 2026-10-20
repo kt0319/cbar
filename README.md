@@ -146,6 +146,19 @@ The plugin output format is inspired by [xbar](https://github.com/matryer/xbar),
 
 Showcase plugins are included under [plugins/](plugins/) to demonstrate panel output, popup structure, actions, environment configuration, refresh behavior, and dynamic status rows.
 
+## Multiple Panel Instances
+
+`cbar --instance <name>` runs an independent applet that shows only the plugins listed in `~/.config/cbar/config-<name>.json`. Each instance has its own `.desktop` entry, so it can be placed anywhere in the COSMIC panel.
+
+Create an instance for a plugin and put it in the panel in one step:
+
+```bash
+scripts/add-plugin.sh 5-my-tool.1m.sh        # right side (default)
+scripts/add-plugin.sh 5-my-tool.1m.sh start  # left side
+```
+
+The instance name is derived from the file name (`5-my-tool.1m.sh` -> `my-tool`). The script edits `plugins_wings` of the COSMIC panel config and aborts without changes if the format is unexpected. To only create the instance, use `scripts/install-instance.sh <name> [plugin-file-name]` and add it from COSMIC settings.
+
 ## Plugin Environment
 
 `cbar` loads optional plugin environment variables from:
