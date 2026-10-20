@@ -28,6 +28,7 @@ use cosmic::widget::{
     text,
 };
 use cosmic::{Element, widget};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 use std::time::{Duration, Instant};
@@ -79,6 +80,7 @@ struct CBarApplet {
     activation_tx: Option<calloop::channel::Sender<TokenRequest>>,
     activation_request_seq: u64,
     pending_activation: Vec<(String, PluginState, MenuEntry)>,
+    expanded_submenus: HashSet<(usize, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +129,10 @@ enum Message {
         entry_index: usize,
         alternate: bool,
     },
+    ToggleSubmenu {
+        plugin_index: usize,
+        label: String,
+    },
     EntryFinished(Result<bool, String>),
     ActivationToken(TokenUpdate),
 }
@@ -157,6 +163,7 @@ impl cosmic::Application for CBarApplet {
                 core,
                 popup: None,
                 popup_plugin_index: None,
+                expanded_submenus: HashSet::new(),
                 popup_view: PopupView::Settings,
                 config,
                 config_path,
@@ -550,6 +557,15 @@ impl cosmic::Application for CBarApplet {
                 }
                 RectangleUpdate::Rectangle(_) => {}
             },
+            Message::ToggleSubmenu {
+                plugin_index,
+                label,
+            } => {
+                let key = (plugin_index, label);
+                if !self.expanded_submenus.remove(&key) {
+                    self.expanded_submenus.insert(key);
+                }
+            }
             Message::RunEntry {
                 plugin_index,
                 entry_index,
@@ -719,7 +735,7 @@ impl cosmic::Application for CBarApplet {
             PopupView::PluginMenu => {
                 if let Some(plugin_index) = self.popup_plugin_index {
                     if let Some(plugin) = self.plugins.get(plugin_index) {
-                        content = push_plugin_menu(content, plugin_index, plugin);
+                        content = push_plugin_menu(content, plugin_index, plugin, &self.expanded_submenus);
                     } else {
                         content =
                             content.push(popup_label(fl!("no-selected-plugins").to_string(), 14));
@@ -734,7 +750,7 @@ impl cosmic::Application for CBarApplet {
                         }
 
                         has_visible_plugins = true;
-                        content = push_plugin_menu(content, plugin_index, plugin)
+                        content = push_plugin_menu(content, plugin_index, plugin, &self.expanded_submenus)
                             .push(divider::horizontal::default());
                     }
 
@@ -994,11 +1010,20 @@ impl CBarApplet {
     }
 }
 
+fn has_submenu(entries: &[MenuEntry], entry_index: usize) -> bool {
+    let entry = &entries[entry_index];
+    !entry.separator
+        && entries
+            .get(entry_index + 1)
+            .is_some_and(|next| !next.separator && next.level > entry.level)
+}
+
 fn render_entry(
     plugin_index: usize,
     entry_index: usize,
     entry: &crate::parser::MenuEntry,
     is_alternate: bool,
+    submenu_expanded: Option<bool>,
 ) -> Element<'static, Message> {
     let prefix = if is_alternate {
         &fl!("alternate-prefix")
@@ -1009,6 +1034,9 @@ fn render_entry(
 
     if entry.params.href.is_some() {
         label.push_str(" ↗");
+    }
+    if let Some(expanded) = submenu_expanded {
+        label.push_str(if expanded { " ▾" } else { " ▸" });
     }
 
     let left_padding = 20 + (entry.level as u16 * 16) + if is_alternate { 12 } else { 0 };
@@ -1032,6 +1060,16 @@ fn render_entry(
         .padding([0, 0, 0, left_padding])
         .width(Length::Fill);
 
+    if let Some(_expanded) = submenu_expanded {
+        return menu_button(content)
+            .padding([8, 16])
+            .on_press(Message::ToggleSubmenu {
+                plugin_index,
+                label: entry.text.clone(),
+            })
+            .into();
+    }
+
     if entry.params.disabled {
         return content.into();
     }
@@ -1050,6 +1088,7 @@ fn push_plugin_menu<'a>(
     mut content: cosmic::widget::Column<'a, Message, cosmic::Theme>,
     plugin_index: usize,
     plugin: &'a PluginState,
+    expanded_submenus: &HashSet<(usize, String)>,
 ) -> cosmic::widget::Column<'a, Message, cosmic::Theme> {
     let mut has_intro = false;
 
@@ -1073,16 +1112,37 @@ fn push_plugin_menu<'a>(
         content = content.push(divider::horizontal::default());
     }
 
-    for (entry_index, entry) in plugin.menu_entries().iter().enumerate() {
+    let entries = plugin.menu_entries();
+    let mut collapsed_level: Option<usize> = None;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        if let Some(level) = collapsed_level {
+            if entry.level > level {
+                continue;
+            }
+            collapsed_level = None;
+        }
+
         if entry.separator {
             content = content.push(divider::horizontal::default());
             continue;
         }
 
-        content = content.push(render_entry(plugin_index, entry_index, entry, false));
+        let submenu_expanded = has_submenu(entries, entry_index)
+            .then(|| expanded_submenus.contains(&(plugin_index, entry.text.clone())));
+        if submenu_expanded == Some(false) {
+            collapsed_level = Some(entry.level);
+        }
+
+        content = content.push(render_entry(
+            plugin_index,
+            entry_index,
+            entry,
+            false,
+            submenu_expanded,
+        ));
 
         if let Some(alternate) = entry.alternate.as_ref() {
-            content = content.push(render_entry(plugin_index, entry_index, alternate, true));
+            content = content.push(render_entry(plugin_index, entry_index, alternate, true, None));
         }
     }
 
@@ -1827,4 +1887,34 @@ fn external_refresh_subscription() -> Subscription<Message> {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod submenu_tests {
+    use super::*;
+    use crate::parser::ItemParams;
+
+    fn entry(level: usize, separator: bool) -> MenuEntry {
+        MenuEntry {
+            level,
+            text: String::new(),
+            params: ItemParams::default(),
+            separator,
+            alternate: None,
+        }
+    }
+
+    #[test]
+    fn parent_of_deeper_entry_has_submenu() {
+        let entries = vec![entry(0, false), entry(1, false), entry(0, false)];
+        assert!(has_submenu(&entries, 0));
+        assert!(!has_submenu(&entries, 1));
+        assert!(!has_submenu(&entries, 2));
+    }
+
+    #[test]
+    fn separator_is_never_a_submenu_parent() {
+        let entries = vec![entry(0, true), entry(1, false)];
+        assert!(!has_submenu(&entries, 0));
+    }
 }
